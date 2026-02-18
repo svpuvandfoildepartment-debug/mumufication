@@ -1638,6 +1638,7 @@ def init_session_state():
         
         # API keys
         "api_keys_set": False,
+        "api_provider": "Finnhub",
         "finnhub_key_enc": b"",
         "av_key_enc": b"",
         "td_key_enc": b"",
@@ -1776,72 +1777,31 @@ def render_login_screen():
 
 
 def render_api_key_setup():
-    """Render API key input section in sidebar."""
+    """Simple API status in sidebar - full config in main screen."""
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🔑 API Keys")
+    st.sidebar.markdown("<span class='section-label'>🔑 API Status</span>", unsafe_allow_html=True)
 
     if st.session_state.api_keys_set:
+        provider = st.session_state.get("api_provider", "Finnhub")
+        st.sidebar.success(f"✅ {provider}")
         fh = decrypt_api_key(st.session_state.finnhub_key_enc)
         st.sidebar.success(f"Finnhub: {mask_key(fh)}")
-        if st.sidebar.button("🔄 Reset API Keys"):
+        st.sidebar.caption("Configure API in main screen ↑")
+        if st.sidebar.button("🔄 Reset API Keys", use_container_width=True):
             st.session_state.api_keys_set = False
             st.session_state.finnhub_key_enc = b""
             st.rerun()
         return
 
-    with st.sidebar.form("api_key_form"):
-        st.caption("Keys are encrypted in session memory. Never logged or stored.")
-        fh_key = st.text_input(
-            "Finnhub API Key *",
-            type="password",
-            placeholder="Enter Finnhub key...",
-            help="Get free key at finnhub.io",
-        )
-        av_key = st.text_input(
-            "Alpha Vantage Key (optional)",
-            type="password",
-            placeholder="Fallback data source",
-        )
-        submitted = st.form_submit_button("🔒 Secure & Save Keys", type="primary")
-        if submitted:
-            if fh_key:
-                st.session_state.finnhub_key_enc = encrypt_api_key(fh_key)
-                st.session_state.av_key_enc = encrypt_api_key(av_key) if av_key else b""
-                st.session_state.api_keys_set = True
-                st.success("✅ Keys encrypted and saved!")
-                st.rerun()
-            else:
-                st.warning("Finnhub key is required. You can still use demo mode.")
-                st.session_state.api_keys_set = True
-                st.rerun()
 
-    st.sidebar.info("💡 **Demo Mode**: Without API keys, the screener uses synthetic data to demonstrate functionality.")
+        st.sidebar.info("💡 Configure API in main screen above.")
+
 
 
 def render_screening_controls():
-    """Render screener control panel in sidebar."""
-    t = get_theme()
+    """Render screener control panel in sidebar (minimal now)."""
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"<p style='font-weight:700;font-size:0.85rem;color:{t['text_muted']};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px'>⚙️ Screening Parameters</p>", unsafe_allow_html=True)
-
-    # ── Market toggle switches ──────────────────────────────────────────────
-    st.sidebar.markdown(f"<p style='font-size:0.82rem;font-weight:600;color:{t['text']}'>Markets</p>", unsafe_allow_html=True)
-    col_us, col_in = st.sidebar.columns(2)
-    with col_us:
-        us_on = st.toggle("🇺🇸 US", value=("US" in st.session_state.markets), key="mkt_us")
-    with col_in:
-        in_on = st.toggle("🇮🇳 India", value=("India" in st.session_state.markets), key="mkt_in")
-
-    new_markets = []
-    if us_on:
-        new_markets.append("US")
-    if in_on:
-        new_markets.append("India")
-    if not new_markets:          # prevent empty selection
-        new_markets = ["US"]
-    st.session_state.markets = new_markets
-
-    st.sidebar.markdown("")
+    st.sidebar.markdown("<span class='section-label'>⚙️ Screening Filters</span>", unsafe_allow_html=True)
 
     # ── Price range ─────────────────────────────────────────────────────────
     st.session_state.min_price, st.session_state.max_price = st.sidebar.slider(
@@ -1853,12 +1813,18 @@ def render_screening_controls():
     )
 
     # ── Profit target ────────────────────────────────────────────────────────
-    st.session_state.min_profit_pct = st.sidebar.slider(
-        "Min Profit Target (%)",
+    st.session_state.min_profit_pct_us = st.sidebar.slider(
+        "US Min Profit Target (%)",
         min_value=5, max_value=150,
-        value=int(st.session_state.min_profit_pct),
+        value=int(st.session_state.get("min_profit_pct_us", 15)),
         step=5,
-        help="Minimum projected upside % for a stock to appear in results",
+    )
+    
+    st.session_state.min_profit_pct_india = st.sidebar.slider(
+        "India Min Profit Target (%)",
+        min_value=5, max_value=150,
+        value=int(st.session_state.get("min_profit_pct_india", 15)),
+        step=5,
     )
 
     # ── Ticker subset ────────────────────────────────────────────────────────
@@ -2899,6 +2865,123 @@ def get_plotly_layout(t: Dict, height: int = 400, title: str = "") -> Dict:
 
 
 # ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
+def render_main_config_panel():
+    """Render main configuration panel in the app body (markets + API)."""
+    t = get_theme()
+    
+    st.markdown(f"""
+    <div style='background:{t["surface"]};border:1px solid {t["border"]};
+    border-radius:12px;padding:20px 24px;margin-bottom:20px;'>
+        <span class='section-label'>⚙️ Configuration</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    # ── Left: Market Selection ─────────────────────────────────────────────
+    with col1:
+        st.markdown(f"<p style='font-size:0.95rem;font-weight:700;color:{t['text']};margin-bottom:12px;'>📊 Active Markets</p>", unsafe_allow_html=True)
+        
+        col_us, col_in = st.columns(2)
+        with col_us:
+            us_on = st.toggle(
+                "🇺🇸 **US Markets**",
+                value=("US" in st.session_state.get("markets", ["US"])),
+                key="main_mkt_us",
+                help="NYSE / NASDAQ stocks"
+            )
+        with col_in:
+            in_on = st.toggle(
+                "🇮🇳 **Indian Markets**",
+                value=("India" in st.session_state.get("markets", [])),
+                key="main_mkt_in",
+                help="NSE stocks"
+            )
+        
+        new_markets = []
+        if us_on:
+            new_markets.append("US")
+        if in_on:
+            new_markets.append("India")
+        if not new_markets:
+            new_markets = ["US"]
+        
+        if st.session_state.markets != new_markets:
+            st.session_state.markets = new_markets
+            if st.session_state.get("logged_in"):
+                save_user_data(st.session_state.username)
+        
+        # Show active markets
+        active_badges = " ".join([
+            f"<span class='badge'>🇺🇸 US</span>" if m == "US" 
+            else f"<span class='badge badge-green'>🇮🇳 India</span>"
+            for m in new_markets
+        ])
+        st.markdown(f"<div style='margin-top:12px;'>{active_badges}</div>", unsafe_allow_html=True)
+    
+    # ── Right: API Configuration ───────────────────────────────────────────
+    with col2:
+        st.markdown(f"<p style='font-size:0.95rem;font-weight:700;color:{t['text']};margin-bottom:12px;'>🔑 API Configuration</p>", unsafe_allow_html=True)
+        
+        if st.session_state.get("api_keys_set"):
+            provider = st.session_state.get("api_provider", "Finnhub")
+            st.success(f"✅ Connected: **{provider}**")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("🔄 Change Provider/Key", use_container_width=True):
+                    st.session_state.api_keys_set = False
+                    st.rerun()
+            with col_b:
+                if st.button("🧪 Test Connection", use_container_width=True):
+                    st.info("Testing API connection... (feature coming soon)")
+        else:
+            # API Configuration Form
+            with st.form("main_api_form", clear_on_submit=False):
+                provider = st.selectbox(
+                    "API Provider",
+                    ["Finnhub", "Alpha Vantage", "Twelve Data"],
+                    help="Choose your market data provider. Free tiers available for all.",
+                )
+                
+                api_key = st.text_input(
+                    f"{provider} API Key",
+                    type="password",
+                    placeholder="Paste your API key here...",
+                    help=f"Get free key at: {provider.lower().replace(' ', '')}.co or .io",
+                )
+                
+                col_x, col_y = st.columns([2, 1])
+                with col_x:
+                    st.caption("🔒 Keys are encrypted and never logged")
+                with col_y:
+                    submitted = st.form_submit_button("💾 Save API Key", type="primary", use_container_width=True)
+                
+                if submitted:
+                    if api_key and len(api_key) > 10:
+                        st.session_state.api_provider = provider
+                        if provider == "Finnhub":
+                            st.session_state.finnhub_key_enc = encrypt_api_key(api_key)
+                        elif provider == "Alpha Vantage":
+                            st.session_state.av_key_enc = encrypt_api_key(api_key)
+                        elif provider == "Twelve Data":
+                            st.session_state.td_key_enc = encrypt_api_key(api_key)
+                        st.session_state.api_keys_set = True
+                        
+                        if st.session_state.get("logged_in"):
+                            save_user_data(st.session_state.username)
+                        
+                        st.success(f"✅ {provider} API key saved!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ Please enter a valid API key (at least 10 characters)")
+            
+            st.info("💡 **Without API keys**, the screener uses demo data with synthetic prices.")
+
+
+
 def main():
     st.set_page_config(
         page_title="AI Stock Screener + Simulator (Multi-User)",
@@ -3016,6 +3099,11 @@ def main():
         </div>
     </div>
     """, unsafe_allow_html=True)
+    
+    # ── Main Configuration Panel ───────────────────────────────────────────────
+    render_main_config_panel()
+    
+    st.markdown("---")
     
     # ── Main tabs ───────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
