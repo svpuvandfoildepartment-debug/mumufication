@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
 ║     AI STOCK SCREENER + PAPER TRADING SIMULATOR                      ║
-║     US Stocks (NYSE/NASDAQ) + Indian Stocks (NSE)                    ║
+║     US Stocks Only — NYSE/NASDAQ                    ║
 ║     Pure Share Market Only — No ETFs, No Crypto, No Commodities      ║
 ║     Disclaimer: Simulation only — NOT financial advice               ║
 ╚══════════════════════════════════════════════════════════════════════╝
@@ -55,9 +55,8 @@ except ImportError:
     TA_AVAILABLE = False
 
 # ─── CONSTANTS ───────────────────────────────────────────────────────────────
-INR_TO_USD = 1 / 83.5
-USER_DATA_DIR = "user_data"
-os.makedirs(USER_DATA_DIR, exist_ok=True)
+STRATEGY_FILE = "strategy_params.json"
+PORTFOLIO_FILE = "portfolio_state.json"
 
 # ─── US STOCKS — NYSE / NASDAQ (pure equities only) ──────────────────────────
 US_TICKERS = [
@@ -96,33 +95,8 @@ US_TICKERS = [
     "LCID","RIVN","NKLA","WKHS","XPEV","NIO","LI","GRAB","SE","DKNG",
 ]
 
-# ─── INDIA STOCKS — NSE (pure equities only) ─────────────────────────────────
-INDIA_TICKERS = [
-    # Nifty 50
-    "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
-    "HINDUNILVR.NS","KOTAKBANK.NS","SBIN.NS","BAJFINANCE.NS","BHARTIARTL.NS",
-    "ITC.NS","ASIANPAINT.NS","AXISBANK.NS","MARUTI.NS","SUNPHARMA.NS",
-    "TITAN.NS","WIPRO.NS","ULTRACEMCO.NS","NESTLEIND.NS","TECHM.NS",
-    "HCLTECH.NS","ONGC.NS","POWERGRID.NS","NTPC.NS","DIVISLAB.NS",
-    "DRREDDY.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS","JSWSTEEL.NS",
-    "TATASTEEL.NS","TATAMOTORS.NS","M&M.NS","BAJAJFINSV.NS","INDUSINDBK.NS",
-    "BPCL.NS","ADANIENT.NS","ADANIPORTS.NS","GRASIM.NS","HEROMOTOCO.NS",
-    "COALINDIA.NS","BRITANNIA.NS","SHREECEM.NS","SBILIFE.NS","HDFCLIFE.NS",
-    "APOLLOHOSP.NS","TATACONSUM.NS","LT.NS","PIDILITIND.NS","HAVELLS.NS",
-    # Nifty Next 50 / Mid-cap
-    "DMART.NS","BERGEPAINT.NS","GODREJCP.NS","MUTHOOTFIN.NS","SIEMENS.NS",
-    "BANDHANBNK.NS","FEDERALBNK.NS","IDFCFIRSTB.NS","RBLBANK.NS","AUBANK.NS",
-    "TRENT.NS","NAUKRI.NS","INDIGO.NS","IRCTC.NS","ZOMATO.NS",
-    "PAYTM.NS","NYKAA.NS","POLICYBZR.NS","DELHIVERY.NS","CARTRADE.NS",
-    "VEDL.NS","SAIL.NS","NMDC.NS","MOIL.NS","NATIONALUM.NS",
-    "TORNTPHARM.NS","LUPIN.NS","ALKEM.NS","AUROPHARMA.NS","BIOCON.NS",
-    "BALKRISIND.NS","MOTHERSON.NS","BHARAT FORGE.NS","CUMMINSIND.NS","SCHAEFFLER.NS",
-    "ICICIPRULI.NS","ICICIGI.NS","BAJAJHLDNG.NS","CHOLAFIN.NS","MANAPPURAM.NS",
-    "VOLTAS.NS","BLUESTARCO.NS","WHIRLPOOL.NS","CROMPTON.NS","POLYCAB.NS",
-    "PHOENIXLTD.NS","DLF.NS","GODREJPROP.NS","OBEROIRLTY.NS","PRESTIGE.NS",
-]
 
-ALL_TICKERS = US_TICKERS + INDIA_TICKERS
+ALL_TICKERS = US_TICKERS
 
 # ─── SECURITY HELPERS ────────────────────────────────────────────────────────
 def get_or_create_fernet_key() -> bytes:
@@ -159,6 +133,109 @@ def mask_key(key: str) -> str:
 
 
 # ─── DATA FETCHING ────────────────────────────────────────────────────────────
+
+
+# ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
+def save_session_data():
+    """Save screener results and trading state to disk."""
+    if not st.session_state.get("auto_save_enabled", True):
+        return
+    
+    try:
+        data = {
+            "screener_results": st.session_state.get("screener_results", pd.DataFrame()).to_dict("records"),
+            "last_screen_time": str(st.session_state.get("last_screen_time")) if st.session_state.get("last_screen_time") else None,
+            "strategy_params": st.session_state.get("strategy_params", {}),
+            "initial_capital": st.session_state.get("initial_capital", 50000.0),
+            "min_price": st.session_state.get("min_price", 5.0),
+            "max_price": st.session_state.get("max_price", 500.0),
+            "min_profit_pct": st.session_state.get("min_profit_pct", 15.0),
+            "auto_scan_interval": st.session_state.get("auto_scan_interval", 5),
+            "markets": st.session_state.get("markets", ["US"]),
+        }
+        
+        # Save trader state if exists
+        trader = st.session_state.get("trader")
+        if trader:
+            data["trader"] = {
+                "cash": trader.cash,
+                "initial_capital": trader.initial_capital,
+                "positions": trader.positions,
+                "closed_trades": trader.closed_trades,
+                "equity_curve": [(str(ts), v) for ts, v in trader.equity_curve],
+                "trade_log": trader.trade_log[-100:],  # Keep last 100 entries
+            }
+        
+        with open("session_data.json", "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        
+        return True
+    except Exception as e:
+        print(f"Error saving session data: {e}")
+        return False
+
+
+def load_session_data():
+    """Load saved screener results and trading state."""
+    if not os.path.exists("session_data.json"):
+        return False
+    
+    try:
+        with open("session_data.json", "r") as f:
+            data = json.load(f)
+        
+        # Load screener results
+        results = data.get("screener_results", [])
+        if results:
+            st.session_state.screener_results = pd.DataFrame(results)
+        
+        # Load last screen time
+        if data.get("last_screen_time"):
+            try:
+                st.session_state.last_screen_time = datetime.fromisoformat(data["last_screen_time"])
+            except Exception:
+                pass
+        
+        # Load strategy params
+        if data.get("strategy_params"):
+            st.session_state.strategy_params = data["strategy_params"]
+        
+        # Load other settings
+        st.session_state.initial_capital = data.get("initial_capital", 50000.0)
+        st.session_state.min_price = data.get("min_price", 5.0)
+        st.session_state.max_price = data.get("max_price", 500.0)
+        st.session_state.min_profit_pct = data.get("min_profit_pct", 15.0)
+        st.session_state.auto_scan_interval = data.get("auto_scan_interval", 5)
+        st.session_state.markets = data.get("markets", ["US"])
+        
+        # Restore trader if exists
+        trader_data = data.get("trader")
+        if trader_data and not st.session_state.get("trader"):
+            trader = PaperTrader(
+                trader_data["initial_capital"],
+                st.session_state.strategy_params
+            )
+            trader.cash = trader_data["cash"]
+            trader.positions = trader_data.get("positions", {})
+            trader.closed_trades = trader_data.get("closed_trades", [])
+            trader.trade_log = trader_data.get("trade_log", [])
+            
+            # Restore equity curve
+            eq = trader_data.get("equity_curve", [])
+            trader.equity_curve = [
+                (datetime.fromisoformat(ts) if isinstance(ts, str) else ts, v) 
+                for ts, v in eq
+            ]
+            
+            st.session_state.trader = trader
+            st.session_state.trading_active = True
+        
+        return True
+    except Exception as e:
+        print(f"Error loading session data: {e}")
+        return False
+
+
 class DataFetcher:
     """Handles all market data retrieval with rate-limit handling and caching."""
 
@@ -857,7 +934,7 @@ class CompositeScorer:
 
 # ─── STOCK SCREENER ──────────────────────────────────────────────────────────
 class StockScreener:
-    """Main screening engine — US stocks (NYSE/NASDAQ) + India stocks (NSE)."""
+    """Main screening engine — US stocks (NYSE/NASDAQ) only."""
 
     def __init__(
         self,
@@ -883,15 +960,7 @@ class StockScreener:
         tickers = []
         if "US" in self.markets:
             tickers += US_TICKERS
-        if "India" in self.markets:
-            tickers += INDIA_TICKERS
         return tickers
-
-    def _to_usd(self, price: float, symbol: str) -> float:
-        """Convert INR to USD for Indian stocks."""
-        if symbol.endswith(".NS") or symbol.endswith(".BO"):
-            return price * INR_TO_USD
-        return price
 
     def screen_single(self, symbol: str) -> Optional[Dict]:
         """Screen a single stock and return its data dict."""
@@ -995,7 +1064,6 @@ class StockScreener:
         elif atr_pct > 5:
             score -= 10
         # Small currency-risk discount for Indian stocks
-        if symbol.endswith(".NS") or symbol.endswith(".BO"):
             score -= 3
         return min(max(score, 0), 100)
 
@@ -1307,181 +1375,7 @@ class PaperTrader:
         return suggestions
 
 
-# ─── USER MANAGEMENT & PERSISTENT STORAGE ────────────────────────────────────
-def get_user_dir(username: str) -> str:
-    """Get or create user-specific data directory."""
-    user_dir = os.path.join(USER_DATA_DIR, username)
-    os.makedirs(user_dir, exist_ok=True)
-    return user_dir
-
-
-def save_user_data(username: str):
-    """Save all session state to user's JSON file."""
-    if not username:
-        return
-    user_dir = get_user_dir(username)
-    data = {
-        "strategy_params_us": st.session_state.get("strategy_params_us", {}),
-        "strategy_params_india": st.session_state.get("strategy_params_india", {}),
-        "screener_results_us": st.session_state.get("screener_results_us", pd.DataFrame()).to_dict("records"),
-        "screener_results_india": st.session_state.get("screener_results_india", pd.DataFrame()).to_dict("records"),
-        "last_screen_time_us": str(st.session_state.get("last_screen_time_us")) if st.session_state.get("last_screen_time_us") else None,
-        "last_screen_time_india": str(st.session_state.get("last_screen_time_india")) if st.session_state.get("last_screen_time_india") else None,
-        "daily_pnl_ledger_us": st.session_state.get("daily_pnl_ledger_us", []),
-        "daily_pnl_ledger_india": st.session_state.get("daily_pnl_ledger_india", []),
-        "last_ledger_date_us": str(st.session_state.get("last_ledger_date_us")) if st.session_state.get("last_ledger_date_us") else None,
-        "last_ledger_date_india": str(st.session_state.get("last_ledger_date_india")) if st.session_state.get("last_ledger_date_india") else None,
-        "initial_capital_us": st.session_state.get("initial_capital_us", 50000.0),
-        "initial_capital_india": st.session_state.get("initial_capital_india", 4200000.0),
-        "min_price": st.session_state.get("min_price", 5.0),
-        "max_price": st.session_state.get("max_price", 500.0),
-        "min_profit_pct_us": st.session_state.get("min_profit_pct_us", 15.0),
-        "min_profit_pct_india": st.session_state.get("min_profit_pct_india", 15.0),
-        "dark_mode": st.session_state.get("dark_mode", True),
-    }
-    
-    # Save trader state
-    trader_us = st.session_state.get("trader_us")
-    trader_india = st.session_state.get("trader_india")
-    
-    if trader_us:
-        data["trader_us"] = {
-            "cash": trader_us.cash,
-            "initial_capital": trader_us.initial_capital,
-            "positions": trader_us.positions,
-            "closed_trades": trader_us.closed_trades,
-            "equity_curve": [(str(ts), v) for ts, v in trader_us.equity_curve],
-            "trade_log": trader_us.trade_log,
-        }
-    if trader_india:
-        data["trader_india"] = {
-            "cash": trader_india.cash,
-            "initial_capital": trader_india.initial_capital,
-            "positions": trader_india.positions,
-            "closed_trades": trader_india.closed_trades,
-            "equity_curve": [(str(ts), v) for ts, v in trader_india.equity_curve],
-            "trade_log": trader_india.trade_log,
-        }
-    
-    with open(os.path.join(user_dir, "session_data.json"), "w") as f:
-        json.dump(data, f, indent=2, default=str)
-
-
-def load_user_data(username: str):
-    """Load user's saved data into session state."""
-    if not username:
-        return
-    user_dir = get_user_dir(username)
-    filepath = os.path.join(user_dir, "session_data.json")
-    
-    if not os.path.exists(filepath):
-        return
-    
-    try:
-        with open(filepath, "r") as f:
-            data = json.load(f)
-        
-        st.session_state.strategy_params_us = data.get("strategy_params_us", load_default_strategy("US"))
-        st.session_state.strategy_params_india = data.get("strategy_params_india", load_default_strategy("India"))
-        
-        # Load screener results
-        results_us = data.get("screener_results_us", [])
-        results_india = data.get("screener_results_india", [])
-        st.session_state.screener_results_us = pd.DataFrame(results_us) if results_us else pd.DataFrame()
-        st.session_state.screener_results_india = pd.DataFrame(results_india) if results_india else pd.DataFrame()
-        
-        # Load timestamps
-        if data.get("last_screen_time_us"):
-            try:
-                st.session_state.last_screen_time_us = datetime.fromisoformat(data["last_screen_time_us"])
-            except Exception:
-                st.session_state.last_screen_time_us = None
-        if data.get("last_screen_time_india"):
-            try:
-                st.session_state.last_screen_time_india = datetime.fromisoformat(data["last_screen_time_india"])
-            except Exception:
-                st.session_state.last_screen_time_india = None
-        
-        # Load ledgers
-        st.session_state.daily_pnl_ledger_us = data.get("daily_pnl_ledger_us", [])
-        st.session_state.daily_pnl_ledger_india = data.get("daily_pnl_ledger_india", [])
-        
-        # Load other preferences
-        st.session_state.min_price = data.get("min_price", 5.0)
-        st.session_state.max_price = data.get("max_price", 500.0)
-        st.session_state.min_profit_pct_us = data.get("min_profit_pct_us", 15.0)
-        st.session_state.min_profit_pct_india = data.get("min_profit_pct_india", 15.0)
-        st.session_state.initial_capital_us = data.get("initial_capital_us", 50000.0)
-        st.session_state.initial_capital_india = data.get("initial_capital_india", 4200000.0)
-        st.session_state.dark_mode = data.get("dark_mode", True)
-        
-        # Restore traders
-        if data.get("trader_us") and not st.session_state.get("trader_us"):
-            td = data["trader_us"]
-            trader = PaperTrader(td["initial_capital"], st.session_state.strategy_params_us)
-            trader.cash = td["cash"]
-            trader.positions = td.get("positions", {})
-            trader.closed_trades = td.get("closed_trades", [])
-            trader.trade_log = td.get("trade_log", [])
-            eq = td.get("equity_curve", [])
-            trader.equity_curve = [(datetime.fromisoformat(ts) if isinstance(ts, str) else ts, v) for ts, v in eq]
-            st.session_state.trader_us = trader
-            
-        if data.get("trader_india") and not st.session_state.get("trader_india"):
-            td = data["trader_india"]
-            trader = PaperTrader(td["initial_capital"], st.session_state.strategy_params_india)
-            trader.cash = td["cash"]
-            trader.positions = td.get("positions", {})
-            trader.closed_trades = td.get("closed_trades", [])
-            trader.trade_log = td.get("trade_log", [])
-            eq = td.get("equity_curve", [])
-            trader.equity_curve = [(datetime.fromisoformat(ts) if isinstance(ts, str) else ts, v) for ts, v in eq]
-            st.session_state.trader_india = trader
-            
-    except Exception as e:
-        st.error(f"Error loading user data: {e}")
-
-
-def load_default_strategy(market: str) -> Dict:
-    """Return default strategy params for US or India market."""
-    base = {
-        "tech_weight": 0.40,
-        "fund_weight": 0.40,
-        "market_weight": 0.20,
-        "rsi_weight": 1.0,
-        "min_score_to_trade": 60,
-        "stop_loss_pct": 0.10,
-        "trailing_stop_pct": 0.07,
-        "take_profit_pct": 0.20,
-        "position_risk_pct": 0.02,
-        "max_positions": 5,
-        "slippage_pct": 0.002,
-        "commission_pct": 0.001,
-        "version": 1,
-    }
-    
-    if market == "India":
-        # India-specific adjustments
-        base.update({
-            "tech_weight": 0.35,
-            "fund_weight": 0.45,
-            "market_weight": 0.20,
-            "stop_loss_pct": 0.12,  # Wider stops for higher volatility
-            "slippage_pct": 0.003,  # Slightly higher slippage
-            "min_score_to_trade": 65,  # More conservative
-        })
-    
-    return base
-
-
-def get_all_usernames() -> List[str]:
-    """Get list of all registered usernames."""
-    if not os.path.exists(USER_DATA_DIR):
-        return []
-    return [d for d in os.listdir(USER_DATA_DIR) if os.path.isdir(os.path.join(USER_DATA_DIR, d))]
-
-
-# ─── STRATEGY PARAMETER MANAGER (DEPRECATED - now per-market) ────────────────
+# ─── STRATEGY PARAMETER MANAGER ──────────────────────────────────────────────
 def load_strategy_params() -> Dict:
     """Load strategy params from file or return defaults."""
     defaults = {
@@ -1631,59 +1525,35 @@ def make_score_breakdown_chart(results_df: pd.DataFrame) -> go.Figure:
 # ─── STREAMLIT APP ────────────────────────────────────────────────────────────
 def init_session_state():
     """Initialize all session state variables."""
+    # Try to load saved data first
+    if "data_loaded" not in st.session_state:
+        load_session_data()
+        st.session_state.data_loaded = True
+    
     defaults = {
-        # User auth
-        "logged_in": False,
-        "username": "",
-        
-        # API keys
         "api_keys_set": False,
-        "api_provider": "Finnhub",
         "finnhub_key_enc": b"",
         "av_key_enc": b"",
         "td_key_enc": b"",
-        
-        # Separate strategies for US and India
-        "strategy_params_us": load_default_strategy("US"),
-        "strategy_params_india": load_default_strategy("India"),
-        
-        # Separate screener results
-        "screener_results_us": pd.DataFrame(),
-        "screener_results_india": pd.DataFrame(),
-        "last_screen_time_us": None,
-        "last_screen_time_india": None,
-        
-        # Separate traders
-        "trader_us": None,
-        "trader_india": None,
-        "trading_active_us": False,
-        "trading_active_india": False,
-        
-        # Separate capital and params
-        "initial_capital_us": 50000.0,
-        "initial_capital_india": 4200000.0,  # ~$50k in INR
-        "min_profit_pct_us": 15.0,
-        "min_profit_pct_india": 15.0,
-        
-        # Shared params
+        "strategy_params": load_strategy_params(),
+        "screener_results": pd.DataFrame(),
+        "last_screen_time": None,
+        "trader": None,
+        "trading_active": False,
+        "initial_capital": 50000.0,
         "min_price": 5.0,
         "max_price": 500.0,
-        "markets": ["US", "India"],
+        "min_profit_pct": 15.0,
+        "markets": ["US"],
         "screen_ticker_subset": "Top 100",
         "dark_mode": True,
         "selected_stock": None,
-        "improvements_us": [],
-        "improvements_india": [],
+        "improvements": [],
         "auto_refresh": False,
-        
-        # Separate ledgers
-        "daily_pnl_ledger_us": [],
-        "daily_pnl_ledger_india": [],
-        "last_ledger_date_us": None,
-        "last_ledger_date_india": None,
-        
-        # Active market tab
-        "active_market": "US",
+        "auto_scan_interval": 5,  # minutes
+        "auto_save_enabled": True,
+        "daily_pnl_ledger": [],       # list of {date, realized, unrealized, portfolio_value}
+        "last_ledger_date": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1698,110 +1568,73 @@ def get_fetcher() -> DataFetcher:
     return DataFetcher(fh, av, td)
 
 
-def render_login_screen():
-    """Render simple username login screen."""
-    t = get_theme()
-    
-    st.markdown(f"""
-    <div style="text-align:center;padding-top:80px;">
-        <div style="font-size:3rem;font-family:'JetBrains Mono',monospace;font-weight:800;
-                    background:linear-gradient(135deg,{t['accent']},{t['accent2']});
-                    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                    margin-bottom:12px;">
-            📈 AI Stock Screener
-        </div>
-        <p style="color:{t['text_muted']};font-size:1rem;margin-bottom:40px;">
-            Multi-user trading simulator with persistent data storage
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(f"""
-        <div style="background:{t['surface']};border:1px solid {t['border']};
-                    border-radius:16px;padding:32px 40px;box-shadow:0 4px 20px {t['accent_glow']};">
-            <h3 style="text-align:center;color:{t['text']};margin-bottom:24px;">
-                👤 Enter Your Username
-            </h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        username = st.text_input(
-            "",
-            placeholder="Enter username (e.g., john_doe)",
-            max_chars=30,
-            label_visibility="collapsed",
-            key="login_username_input",
-        )
-        
-        st.caption("No password needed — just a simple name to keep your data separate from others.")
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🆕 Create New User", use_container_width=True):
-                if username and len(username) >= 3:
-                    if username in get_all_usernames():
-                        st.error(f"❌ Username '{username}' already exists! Choose another or login.")
-                    else:
-                        st.session_state.username = username
-                        st.session_state.logged_in = True
-                        load_user_data(username)  # Will be empty for new user
-                        st.success(f"✅ Welcome, {username}!")
-                        time.sleep(0.5)
-                        st.rerun()
-                else:
-                    st.warning("Username must be at least 3 characters.")
-        
-        with col_b:
-            if st.button("🔓 Login Existing", use_container_width=True, type="primary"):
-                if username:
-                    if username not in get_all_usernames():
-                        st.error(f"❌ User '{username}' not found! Create a new account first.")
-                    else:
-                        st.session_state.username = username
-                        st.session_state.logged_in = True
-                        load_user_data(username)
-                        st.success(f"✅ Welcome back, {username}!")
-                        time.sleep(0.5)
-                        st.rerun()
-                else:
-                    st.warning("Please enter your username.")
-        
-        # Show existing users
-        existing = get_all_usernames()
-        if existing:
-            st.markdown("---")
-            st.caption(f"**Registered users ({len(existing)})**: {', '.join(existing[:10])}" + 
-                      (f" and {len(existing)-10} more..." if len(existing) > 10 else ""))
-
-
 def render_api_key_setup():
-    """Simple API status in sidebar - full config in main screen."""
+    """Render API key input section in sidebar."""
     st.sidebar.markdown("---")
-    st.sidebar.markdown("<span class='section-label'>🔑 API Status</span>", unsafe_allow_html=True)
+    st.sidebar.subheader("🔑 API Keys")
 
     if st.session_state.api_keys_set:
-        provider = st.session_state.get("api_provider", "Finnhub")
-        st.sidebar.success(f"✅ {provider}")
         fh = decrypt_api_key(st.session_state.finnhub_key_enc)
         st.sidebar.success(f"Finnhub: {mask_key(fh)}")
-        st.sidebar.caption("Configure API in main screen ↑")
-        if st.sidebar.button("🔄 Reset API Keys", use_container_width=True):
+        if st.sidebar.button("🔄 Reset API Keys"):
             st.session_state.api_keys_set = False
             st.session_state.finnhub_key_enc = b""
             st.rerun()
         return
 
+    with st.sidebar.form("api_key_form"):
+        st.caption("Keys are encrypted in session memory. Never logged or stored.")
+        fh_key = st.text_input(
+            "Finnhub API Key *",
+            type="password",
+            placeholder="Enter Finnhub key...",
+            help="Get free key at finnhub.io",
+        )
+        av_key = st.text_input(
+            "Alpha Vantage Key (optional)",
+            type="password",
+            placeholder="Fallback data source",
+        )
+        submitted = st.form_submit_button("🔒 Secure & Save Keys", type="primary")
+        if submitted:
+            if fh_key:
+                st.session_state.finnhub_key_enc = encrypt_api_key(fh_key)
+                st.session_state.av_key_enc = encrypt_api_key(av_key) if av_key else b""
+                st.session_state.api_keys_set = True
+                st.success("✅ Keys encrypted and saved!")
+                st.rerun()
+            else:
+                st.warning("Finnhub key is required. You can still use demo mode.")
+                st.session_state.api_keys_set = True
+                st.rerun()
 
-        st.sidebar.info("💡 Configure API in main screen above.")
-
+    st.sidebar.info("💡 **Demo Mode**: Without API keys, the screener uses synthetic data to demonstrate functionality.")
 
 
 def render_screening_controls():
-    """Render screener control panel in sidebar (minimal now)."""
+    """Render screener control panel in sidebar."""
+    t = get_theme()
     st.sidebar.markdown("---")
-    st.sidebar.markdown("<span class='section-label'>⚙️ Screening Filters</span>", unsafe_allow_html=True)
+    st.sidebar.markdown(f"<p style='font-weight:700;font-size:0.85rem;color:{t['text_muted']};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px'>⚙️ Screening Parameters</p>", unsafe_allow_html=True)
+
+    # ── Market toggle switches ──────────────────────────────────────────────
+    st.sidebar.markdown(f"<p style='font-size:0.82rem;font-weight:600;color:{t['text']}'>Markets</p>", unsafe_allow_html=True)
+    col_us, col_in = st.sidebar.columns(2)
+    with col_us:
+        us_on = st.toggle("🇺🇸 US", value=("US" in st.session_state.markets), key="mkt_us")
+    with col_in:
+        pass  # India toggle removed - US only
+
+    new_markets = []
+    if us_on:
+        new_markets.append("US")
+    if in_on:
+        new_markets.append("India")
+    if not new_markets:          # prevent empty selection
+        new_markets = ["US"]
+    st.session_state.markets = new_markets
+
+    st.sidebar.markdown("")
 
     # ── Price range ─────────────────────────────────────────────────────────
     st.session_state.min_price, st.session_state.max_price = st.sidebar.slider(
@@ -1809,22 +1642,16 @@ def render_screening_controls():
         min_value=0.5, max_value=5000.0,
         value=(st.session_state.min_price, st.session_state.max_price),
         step=0.5,
-        help="Indian stock prices auto-converted from INR at ~83.5 rate",
+        help="US stocks in USD at ~83.5 rate",
     )
 
     # ── Profit target ────────────────────────────────────────────────────────
-    st.session_state.min_profit_pct_us = st.sidebar.slider(
-        "US Min Profit Target (%)",
+    st.session_state.min_profit_pct = st.sidebar.slider(
+        "Min Profit Target (%)",
         min_value=5, max_value=150,
-        value=int(st.session_state.get("min_profit_pct_us", 15)),
+        value=int(st.session_state.min_profit_pct),
         step=5,
-    )
-    
-    st.session_state.min_profit_pct_india = st.sidebar.slider(
-        "India Min Profit Target (%)",
-        min_value=5, max_value=150,
-        value=int(st.session_state.get("min_profit_pct_india", 15)),
-        step=5,
+        help="Minimum projected upside % for a stock to appear in results",
     )
 
     # ── Ticker subset ────────────────────────────────────────────────────────
@@ -1839,176 +1666,187 @@ def get_ticker_subset(subset_label: str) -> List[str]:
     tickers = []
     if "US" in st.session_state.get("markets", ["US"]):
         tickers += US_TICKERS
-    if "India" in st.session_state.get("markets", ["US"]):
-        tickers += INDIA_TICKERS
     n_map = {"Top 50": 50, "Top 100": 100, "Top 200": 200, "All (~330)": len(tickers)}
     n = n_map.get(subset_label, 100)
     return tickers[:n]
 
 
 def render_screener_tab():
-    """Render the stock screener tab with separate US/India sub-tabs."""
+    """Render the stock screener tab."""
     st.header("🔍 AI Stock Screener")
-    
-    # Sub-tabs for US and India
-    tab_us, tab_india = st.tabs(["🇺🇸 US Markets", "🇮🇳 Indian Markets"])
-    
-    with tab_us:
-        render_market_screener("US")
-    
-    with tab_india:
-        render_market_screener("India")
-
-
-def render_market_screener(market: str):
-    """Render screener for a specific market."""
-    is_us = (market == "US")
-    flag = "🇺🇸" if is_us else "🇮🇳"
-    exchange = "NYSE / NASDAQ" if is_us else "NSE"
-    cur = "$" if is_us else "₹"
-    
-    results_key = f"screener_results_{market.lower()}"
-    last_time_key = f"last_screen_time_{market.lower()}"
-    min_profit_key = f"min_profit_pct_{market.lower()}"
-    
+    markets_label = " + ".join(st.session_state.get("markets", ["US"]))
     st.caption(
-        f"{flag} Scanning {exchange} pure stocks • "
-        f"No ETFs • No Crypto • "
+        f"Scanning pure stocks: {markets_label} • "
+        f"No ETFs • No Crypto • No Commodities • "
         f"Price: ${st.session_state.min_price:.0f}–${st.session_state.max_price:.0f} USD • "
-        f"Min upside: {st.session_state.get(min_profit_key, 15):.0f}%"
+        f"Min upside: {st.session_state.min_profit_pct:.0f}%"
     )
-    
+
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        run_screen = st.button(f"🚀 Run {market} Screener", type="primary", 
-                               use_container_width=True, key=f"run_{market}")
+        run_screen = st.button("🚀 Run Screener", type="primary", use_container_width=True)
     with col2:
-        auto_refresh = st.toggle("⏱ Auto (5min)", value=st.session_state.auto_refresh, 
-                                key=f"auto_{market}")
+        interval_label = st.session_state.get("auto_scan_interval", 5)
+        auto_refresh = st.toggle(
+            f"⏱ Auto-Refresh ({interval_label}min)", 
+            value=st.session_state.auto_refresh,
+            help=f"Automatically re-scan every {interval_label} minutes"
+        )
         st.session_state.auto_refresh = auto_refresh
     with col3:
-        last_time = st.session_state.get(last_time_key)
-        if last_time:
-            st.caption(f"Last: {last_time.strftime('%H:%M:%S')}")
-    
+        if st.session_state.last_screen_time:
+            st.caption(f"Last: {st.session_state.last_screen_time.strftime('%H:%M:%S')}")
+
     # Run screening
-    if run_screen or (auto_refresh and last_time and (datetime.now() - last_time).seconds > 300):
+    scan_interval = st.session_state.get("auto_scan_interval", 5) * 60  # Convert to seconds
+    should_auto_scan = (
+        auto_refresh and
+        st.session_state.last_screen_time and
+        (datetime.now() - st.session_state.last_screen_time).seconds > scan_interval
+    )
+    
+    if run_screen or should_auto_scan:
         fetcher = get_fetcher()
-        tickers = US_TICKERS if is_us else INDIA_TICKERS
-        tickers = tickers[:st.session_state.get("screen_ticker_subset_limit", 100)]
-        
-        strategy_key = f"strategy_params_{market.lower()}"
+        tickers = get_ticker_subset(st.session_state.screen_ticker_subset)
         screener = StockScreener(
             fetcher=fetcher,
-            strategy_params=st.session_state.get(strategy_key, load_default_strategy(market)),
+            strategy_params=st.session_state.strategy_params,
             min_price_usd=st.session_state.min_price,
             max_price_usd=st.session_state.max_price,
-            min_profit_pct=st.session_state.get(min_profit_key, 15),
-            markets=[market],
+            min_profit_pct=st.session_state.min_profit_pct,
+            markets=st.session_state.markets,
         )
-        
+
         progress_bar = st.progress(0.0)
         status_text = st.empty()
-        
+
         def progress_callback(pct, sym):
             progress_bar.progress(min(pct, 1.0))
             status_text.caption(f"⏳ Scanning {sym}...")
-        
-        with st.spinner(f"🔍 Running {market} screening..."):
-            results = screener.run(tickers=tickers, top_n=20, progress_callback=progress_callback)
-        
+
+        with st.spinner("🔍 Running AI screening..."):
+            results = screener.run(
+                tickers=tickers,
+                top_n=20,
+                progress_callback=progress_callback,
+            )
+
         progress_bar.empty()
         status_text.empty()
-        st.session_state[results_key] = results
-        st.session_state[last_time_key] = datetime.now()
+        st.session_state.screener_results = results
+        st.session_state.last_screen_time = datetime.now()
         
-        # Auto-save
-        if st.session_state.get("logged_in"):
-            save_user_data(st.session_state.username)
-    
+        # Auto-save results
+        if st.session_state.get("auto_save_enabled", True):
+            if save_session_data():
+                st.success("✅ Results saved", icon="💾")
+
     # Display results
-    results = st.session_state.get(results_key, pd.DataFrame())
+    results = st.session_state.screener_results
     if results.empty:
-        st.info(f"👆 Click **Run {market} Screener** to scan. Without API keys, demo data will be used.")
+        st.info("👆 Click **Run Screener** to scan the market. Without API keys, demo data will be used.")
+        st.markdown("""
+        ### How the AI Score Works
+        | Component | Weight | Factors |
+        |-----------|--------|---------|
+        | 🔵 Technical | 40% | RSI, MACD, SMA crossovers, chart patterns, momentum, volume |
+        | 🟢 Fundamental | 40% | P/E ratio, EPS growth, ROE, Debt/Equity, revenue growth |
+        | 🟠 Market Context | 20% | Sector strength, volatility, market regime |
+
+        ### Stocks Covered
+        | Market | Exchange | Sectors | Count |
+        |--------|----------|---------|-------|
+        | 🇺🇸 US | NYSE / NASDAQ | Tech, Finance, Healthcare, Consumer, Energy, Industrials, Materials, REITs, Utilities | ~200 stocks |
+
+        > ✅ **Pure share market only** — no ETFs, no crypto, no commodities, no forex.
+        > 🔑 Enter your Finnhub API key in the sidebar for live data. Without it, demo mode uses synthetic prices.
+        """)
         return
-    
-    st.subheader(f"📊 Top {len(results)} {market} Opportunities")
+
+    # Results table
+    st.subheader(f"📊 Top {len(results)} Opportunities Found")
     display_cols = ["symbol", "name", "price_usd", "daily_change_pct",
                     "ai_score", "tech_score", "fund_score",
                     "upside_pct", "target_price", "rsi", "patterns"]
-    
+
     display_df = results[display_cols].copy()
-    display_df.columns = ["Ticker", "Company", f"Price ({cur})", "Day Chg %",
-                          "AI Score", "Tech", "Fund",
-                          "Upside %", f"Target ({cur})", "RSI", "Patterns"]
-    display_df["Patterns"] = display_df["Patterns"].apply(lambda x: ", ".join(x[:2]) if x else "–")
-    
+    display_df.columns = ["Ticker", "Company", "Price (USD)", "Day Chg %",
+                          "AI Score /100", "Tech Score", "Fund Score",
+                          "Upside %", "Target (USD)", "RSI", "Patterns"]
+    display_df["Patterns"] = display_df["Patterns"].apply(
+        lambda x: ", ".join(x[:2]) if x else "–"
+    )
+
     def color_score(val):
         if val >= 70: return "background-color: #1b5e20; color: #a5d6a7"
         if val >= 55: return "background-color: #1a237e; color: #90caf9"
         if val >= 40: return "background-color: #f57f17; color: #fff9c4"
         return ""
-    
+
     def color_upside(val):
         if val >= 30: return "color: #69f0ae; font-weight: bold"
         if val >= 15: return "color: #40c4ff"
         return "color: #ef9a9a"
-    
+
     styled = (
         display_df.style
-        .applymap(color_score, subset=["AI Score", "Tech", "Fund"])
+        .applymap(color_score, subset=["AI Score /100", "Tech Score", "Fund Score"])
         .applymap(color_upside, subset=["Upside %"])
         .format({
-            f"Price ({cur})": f"{cur}{{:.2f}}",
+            "Price (USD)": "${:.2f}",
             "Day Chg %": "{:+.1f}%",
+            "AI Score /100": "{:.0f}",
+            "Tech Score": "{:.0f}",
+            "Fund Score": "{:.0f}",
             "Upside %": "{:.1f}%",
-            f"Target ({cur})": f"{cur}{{:.2f}}",
+            "Target (USD)": "${:.2f}",
             "RSI": "{:.0f}",
         })
     )
     st.dataframe(styled, use_container_width=True, height=500)
-    
-    # Charts
+
+    # Score breakdown chart
     col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(make_score_breakdown_chart(results), use_container_width=True)
     with col2:
+        # Sector distribution
         if "sector" in results.columns:
             sector_counts = results["sector"].value_counts().head(8)
-            t = get_theme()
             fig_sector = px.pie(
                 values=sector_counts.values,
                 names=sector_counts.index,
-                title=f"{market} Stocks by Sector",
-                template=t["plotly_template"],
+                title="Screened Stocks by Sector",
+                template=get_theme()["plotly_template"],
                 color_discrete_sequence=px.colors.qualitative.Dark24,
             )
             fig_sector.update_layout(
-                paper_bgcolor=t["chart_bg"],
+                paper_bgcolor=get_theme()["chart_bg"],
                 height=380,
                 margin=dict(l=0, r=0, t=40, b=0),
-                font=dict(color=t["text"]),
+                font=dict(color=get_theme()["text"]),
             )
             st.plotly_chart(fig_sector, use_container_width=True)
-    
-    # Stock detail
+
+    # Individual stock detail
     st.subheader("📈 Stock Detail")
     ticker_options = results["symbol"].tolist()
-    selected = st.selectbox(f"Select a {market} stock:", ticker_options, key=f"stock_{market}")
+    selected = st.selectbox("Select a stock for detailed chart:", ticker_options)
     if selected:
         row = results[results["symbol"] == selected].iloc[0]
         df_chart = row.get("df")
-        
+
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("AI Score", f"{row['ai_score']:.0f}/100")
-        m2.metric("Price", f"{cur}{row['price_usd']:.2f}", delta=f"{row['daily_change_pct']:+.1f}%")
-        m3.metric("Target", f"{cur}{row['target_price']:.2f}")
+        m2.metric("Price", f"${row['price_usd']:.2f}", delta=f"{row['daily_change_pct']:+.1f}%")
+        m3.metric("Target", f"${row['target_price']:.2f}")
         m4.metric("Upside", f"{row['upside_pct']:.1f}%")
         m5.metric("RSI", f"{row['rsi']:.0f}")
-        
+
         if isinstance(df_chart, pd.DataFrame) and len(df_chart) > 5:
             st.plotly_chart(make_candlestick_chart(df_chart, selected), use_container_width=True)
-        
+
+        # Reasons
         st.markdown("**🧠 AI Reasoning:**")
         reasons = row.get("reasons", [])
         for r in reasons:
@@ -2019,21 +1857,9 @@ def render_market_screener(market: str):
 
 
 def render_simulator_tab():
-    """Render simulator with separate US/India tabs."""
-    st.header("💹 Paper Trading Simulator")
-    tab_us, tab_india = st.tabs(["🇺🇸 US Markets", "🇮🇳 Indian Markets"])
-    
-    with tab_us:
-        render_market_simulator("US")
-    with tab_india:
-        render_market_simulator("India")
-
-
-def render_market_simulator(market: str):
-    """Render simulator for specific market with persistent ledger."""
+    """Render the paper trading simulator tab with full ledger."""
     tc = get_theme()
     active = st.session_state.get("active_market", "US")
-    flag   = "🇺🇸" if active == "US" else "🇮🇳"
     cur    = "$" if active == "US" else "₹"
 
     st.header(f"💹 Paper Trading Simulator — {flag} {active}")
@@ -2082,7 +1908,12 @@ def render_market_simulator(market: str):
             with st.spinner("Executing trading cycle..."):
                 trader.auto_trade(st.session_state.screener_results, fetcher)
             st.session_state.trader = trader
-            st.success("Cycle complete!")
+            
+            # Auto-save after trading
+            if st.session_state.get("auto_save_enabled", True):
+                save_session_data()
+            
+            st.success("Cycle complete! (Auto-saved)")
             st.rerun()
 
     trader = st.session_state.trader
@@ -2366,21 +2197,8 @@ def render_market_simulator(market: str):
 
 
 def render_settings_tab():
-    """Render settings with separate US/India strategy params."""
+    """Render the strategy settings tab."""
     st.header("⚙️ Strategy Settings")
-    st.caption("Separate strategies for US and Indian markets.")
-    
-    tab_us, tab_india = st.tabs(["🇺🇸 US Strategy", "🇮🇳 India Strategy"])
-    
-    with tab_us:
-        render_strategy_settings("US")
-    with tab_india:
-        render_strategy_settings("India")
-
-
-def render_strategy_settings(market: str):
-    """Render strategy settings for a specific market."""
-    st.subheader(f"{market} Market Strategy")
     st.caption("Tune the AI scoring weights and trading parameters.")
     params = st.session_state.strategy_params
 
@@ -2445,20 +2263,8 @@ def render_strategy_settings(market: str):
 
 
 def render_performance_tab():
-    """Render performance with separate US/India analysis."""
+    """Render performance analysis and self-improvement tab."""
     st.header("📈 Performance & Self-Improvement")
-    
-    tab_us, tab_india = st.tabs(["🇺🇸 US Performance", "🇮🇳 India Performance"])
-    
-    with tab_us:
-        render_market_performance("US")
-    with tab_india:
-        render_market_performance("India")
-
-
-def render_market_performance(market: str):
-    """Render performance analysis for a specific market."""
-    st.subheader(f"{market} Trading Performance")
 
     trader = st.session_state.trader
     if trader is None or not trader.closed_trades:
@@ -2865,246 +2671,96 @@ def get_plotly_layout(t: Dict, height: int = 400, title: str = "") -> Dict:
 
 
 # ─── MAIN APP ─────────────────────────────────────────────────────────────────
-
-def render_main_config_panel():
-    """Render main configuration panel in the app body (markets + API)."""
-    t = get_theme()
-    
-    st.markdown(f"""
-    <div style='background:{t["surface"]};border:1px solid {t["border"]};
-    border-radius:12px;padding:20px 24px;margin-bottom:20px;'>
-        <span class='section-label'>⚙️ Configuration</span>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    # ── Left: Market Selection ─────────────────────────────────────────────
-    with col1:
-        st.markdown(f"<p style='font-size:0.95rem;font-weight:700;color:{t['text']};margin-bottom:12px;'>📊 Active Markets</p>", unsafe_allow_html=True)
-        
-        col_us, col_in = st.columns(2)
-        with col_us:
-            us_on = st.toggle(
-                "🇺🇸 **US Markets**",
-                value=("US" in st.session_state.get("markets", ["US"])),
-                key="main_mkt_us",
-                help="NYSE / NASDAQ stocks"
-            )
-        with col_in:
-            in_on = st.toggle(
-                "🇮🇳 **Indian Markets**",
-                value=("India" in st.session_state.get("markets", [])),
-                key="main_mkt_in",
-                help="NSE stocks"
-            )
-        
-        new_markets = []
-        if us_on:
-            new_markets.append("US")
-        if in_on:
-            new_markets.append("India")
-        if not new_markets:
-            new_markets = ["US"]
-        
-        if st.session_state.markets != new_markets:
-            st.session_state.markets = new_markets
-            if st.session_state.get("logged_in"):
-                save_user_data(st.session_state.username)
-        
-        # Show active markets
-        active_badges = " ".join([
-            f"<span class='badge'>🇺🇸 US</span>" if m == "US" 
-            else f"<span class='badge badge-green'>🇮🇳 India</span>"
-            for m in new_markets
-        ])
-        st.markdown(f"<div style='margin-top:12px;'>{active_badges}</div>", unsafe_allow_html=True)
-    
-    # ── Right: API Configuration ───────────────────────────────────────────
-    with col2:
-        st.markdown(f"<p style='font-size:0.95rem;font-weight:700;color:{t['text']};margin-bottom:12px;'>🔑 API Configuration</p>", unsafe_allow_html=True)
-        
-        if st.session_state.get("api_keys_set"):
-            provider = st.session_state.get("api_provider", "Finnhub")
-            st.success(f"✅ Connected: **{provider}**")
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("🔄 Change Provider/Key", use_container_width=True):
-                    st.session_state.api_keys_set = False
-                    st.rerun()
-            with col_b:
-                if st.button("🧪 Test Connection", use_container_width=True):
-                    st.info("Testing API connection... (feature coming soon)")
-        else:
-            # API Configuration Form
-            with st.form("main_api_form", clear_on_submit=False):
-                provider = st.selectbox(
-                    "API Provider",
-                    ["Finnhub", "Alpha Vantage", "Twelve Data"],
-                    help="Choose your market data provider. Free tiers available for all.",
-                )
-                
-                api_key = st.text_input(
-                    f"{provider} API Key",
-                    type="password",
-                    placeholder="Paste your API key here...",
-                    help=f"Get free key at: {provider.lower().replace(' ', '')}.co or .io",
-                )
-                
-                col_x, col_y = st.columns([2, 1])
-                with col_x:
-                    st.caption("🔒 Keys are encrypted and never logged")
-                with col_y:
-                    submitted = st.form_submit_button("💾 Save API Key", type="primary", use_container_width=True)
-                
-                if submitted:
-                    if api_key and len(api_key) > 10:
-                        st.session_state.api_provider = provider
-                        if provider == "Finnhub":
-                            st.session_state.finnhub_key_enc = encrypt_api_key(api_key)
-                        elif provider == "Alpha Vantage":
-                            st.session_state.av_key_enc = encrypt_api_key(api_key)
-                        elif provider == "Twelve Data":
-                            st.session_state.td_key_enc = encrypt_api_key(api_key)
-                        st.session_state.api_keys_set = True
-                        
-                        if st.session_state.get("logged_in"):
-                            save_user_data(st.session_state.username)
-                        
-                        st.success(f"✅ {provider} API key saved!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("❌ Please enter a valid API key (at least 10 characters)")
-            
-            st.info("💡 **Without API keys**, the screener uses demo data with synthetic prices.")
-
-
-
 def main():
     st.set_page_config(
-        page_title="AI Stock Screener + Simulator (Multi-User)",
+        page_title="AI Stock Screener + Simulator",
         page_icon="📈",
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    
-    # Initialize state
+
+    # Initialize state FIRST so dark_mode exists before CSS
     init_session_state()
-    
-    # Check login
-    if not st.session_state.get("logged_in"):
-        apply_theme_css()
-        render_login_screen()
-        return
-    
-    # Apply theme
     apply_theme_css()
     t = get_theme()
-    
-    # Auto-save on every interaction
-    username = st.session_state.get("username")
-    
-    # ── Sidebar — User info ────────────────────────────────────────────────────
-    st.sidebar.markdown(f"""
-    <div style='background:{t["surface"]};border:1px solid {t["border"]};border-radius:10px;
-    padding:12px 16px;margin-bottom:12px;text-align:center;'>
-        <div style='font-size:0.7rem;color:{t["text_muted"]};text-transform:uppercase;
-        letter-spacing:0.08em;margin-bottom:4px;'>Logged in as</div>
-        <div style='font-size:1.1rem;font-weight:700;color:{t["accent"]};'>
-            👤 {username}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if st.sidebar.button("🚪 Logout", use_container_width=True):
-        save_user_data(username)
-        st.session_state.logged_in = False
-        st.session_state.username = ""
-        st.rerun()
-    
+
     # ── Sidebar — Display / Theme ──────────────────────────────────────────────
-    st.sidebar.markdown(f"<span class='section-label'>🎨 Display</span>", unsafe_allow_html=True)
+    st.sidebar.markdown(
+        f"<span class='section-label'>🎨 Display</span>",
+        unsafe_allow_html=True,
+    )
     mode_icon  = "🌙" if st.session_state.dark_mode else "☀️"
     mode_label = "Dark Mode" if st.session_state.dark_mode else "Light Mode"
     toggled = st.sidebar.toggle(
         f"{mode_icon}  {mode_label}",
         value=st.session_state.dark_mode,
         key="theme_toggle",
+        help="Switch between dark and light mode for easier reading",
     )
     if toggled != st.session_state.dark_mode:
         st.session_state.dark_mode = toggled
-        save_user_data(username)
         st.rerun()
-    
+
     # ── Sidebar — API Keys + Controls ─────────────────────────────────────────
     render_api_key_setup()
     render_screening_controls()
-    
+
     # ── Sidebar — Session Status ───────────────────────────────────────────────
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"<span class='section-label'>📊 Status</span>", unsafe_allow_html=True)
-    
-    us_active = st.session_state.get("trading_active_us", False)
-    india_active = st.session_state.get("trading_active_india", False)
-    
-    if us_active or india_active:
+    st.sidebar.markdown(
+        f"<span class='section-label'>📊 Session Status</span>",
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption(f"Strategy v{st.session_state.strategy_params.get('version', 1)}")
+    if st.session_state.trading_active:
         st.sidebar.success("🟢 Trading: ACTIVE")
     else:
         st.sidebar.info("⚫ Trading: Stopped")
-    
-    trader_us = st.session_state.get("trader_us")
-    trader_india = st.session_state.get("trader_india")
-    
-    if trader_us:
-        pv = trader_us.portfolio_value
-        initial = trader_us.initial_capital
-        ret = (pv / initial - 1) * 100
-        st.sidebar.metric("🇺🇸 US Portfolio", f"${pv:,.0f}", delta=f"{ret:+.1f}%")
-    
-    if trader_india:
-        pv = trader_india.portfolio_value
-        initial = trader_india.initial_capital
-        ret = (pv / initial - 1) * 100
-        st.sidebar.metric("🇮🇳 India Portfolio", f"₹{pv:,.0f}", delta=f"{ret:+.1f}%")
-    
+    if st.session_state.trader:
+        pv      = st.session_state.trader.portfolio_value
+        initial = st.session_state.trader.initial_capital
+        ret     = (pv / initial - 1) * 100
+        st.sidebar.metric("Portfolio", f"${pv:,.0f}", delta=f"{ret:+.1f}%")
     st.sidebar.markdown("---")
     st.sidebar.caption(f"📦 cryptography: {'✅' if CRYPTO_AVAILABLE else '❌'}")
     st.sidebar.caption(f"📦 plotly: {'✅' if PLOTLY_AVAILABLE else '❌'}")
-    st.sidebar.caption(f"📦 ta: {'✅' if TA_AVAILABLE else '⚪'}")
-    
+    st.sidebar.caption(f"📦 ta (optional): {'✅' if TA_AVAILABLE else '⚪'}")
+
     # ── App header ─────────────────────────────────────────────────────────────
-    markets_active = st.session_state.get("markets", ["US", "India"])
-    badges_html = "".join([
-        f"<span class='badge'>🇺🇸 US</span>" if m == "US"
-        else f"<span class='badge badge-green'>🇮🇳 India</span>"
-        for m in markets_active
-    ])
-    
+    markets_active = st.session_state.get("markets", ["US"])
+    badges_html = "<span class='badge'>🇺🇸 NYSE/NASDAQ</span>"
+
     st.markdown(f"""
     <div style="margin-bottom:18px;">
         <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:6px;">
             <div style="font-size:2rem;font-family:'JetBrains Mono',monospace;font-weight:800;
                         background:linear-gradient(135deg,{t['accent']},{t['accent2']});
-                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                        line-height:1;">
                 📈 AI Stock Screener
             </div>
             <div style="display:flex;gap:6px;align-items:center;padding-bottom:4px;">
                 {badges_html}
-                <span style="font-size:0.72rem;color:{t['text_muted']};font-weight:500;">
-                    &nbsp;Multi-User &nbsp;·&nbsp; Persistent Storage &nbsp;·&nbsp; Separate Strategies
+                <span style="font-size:0.75rem;color:{t['text_muted']};font-weight:500;">
+                    &nbsp;Pure Stocks &nbsp;·&nbsp; No ETFs &nbsp;·&nbsp; No Crypto
                 </span>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
-    # ── Main Configuration Panel ───────────────────────────────────────────────
-    render_main_config_panel()
-    
-    st.markdown("---")
-    
+
+    # ── Disclaimer (collapsible) ────────────────────────────────────────────────
+    with st.expander("⚠️ Disclaimer — Read before use", expanded=False):
+        st.markdown(f"""
+        <div style="color:{t['disclaimer_text']};font-size:0.82rem;line-height:1.7;">
+        This tool is for <strong>educational and simulation purposes only</strong> — NOT financial advice.<br>
+        Covers US stocks only (NYSE/NASDAQ). No ETFs, crypto, or commodities.<br>
+        Past simulated performance does not guarantee future real-world results.<br>
+        Stock markets carry substantial risk including total loss of capital.<br>
+        <strong>Always consult a licensed financial advisor before making any investment decisions.</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
     # ── Main tabs ───────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
         "🔍  Screener",
@@ -3112,7 +2768,7 @@ def main():
         "⚙️  Settings",
         "📈  Performance",
     ])
-    
+
     with tab1:
         render_screener_tab()
     with tab2:
@@ -3121,18 +2777,12 @@ def main():
         render_settings_tab()
     with tab4:
         render_performance_tab()
-    
-    # Auto-save periodically
-    save_user_data(username)
-    
+
     # Auto-refresh
-    if st.session_state.auto_refresh and (us_active or india_active):
+    if st.session_state.auto_refresh and st.session_state.trading_active:
         time.sleep(1)
         st.rerun()
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
