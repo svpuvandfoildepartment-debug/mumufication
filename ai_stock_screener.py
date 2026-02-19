@@ -857,12 +857,7 @@ class StockScreener:
         tickers = []
         if "US" in self.markets:
             tickers += US_TICKERS
-        if "India" in self.markets:
         return tickers
-
-    def _to_usd(self, price: float, symbol: str) -> float:
-        """Convert INR to USD for Indian stocks."""
-        return price
 
     def screen_single(self, symbol: str) -> Optional[Dict]:
         """Screen a single stock and return its data dict."""
@@ -1518,6 +1513,7 @@ def render_screening_controls():
     with col_us:
         us_on = st.toggle("🇺🇸 US", value=("US" in st.session_state.markets), key="mkt_us")
     with col_in:
+        pass  # India toggle removed - US only
 
     new_markets = []
     if us_on:
@@ -1560,7 +1556,6 @@ def get_ticker_subset(subset_label: str) -> List[str]:
     tickers = []
     if "US" in st.session_state.get("markets", ["US"]):
         tickers += US_TICKERS
-    if "India" in st.session_state.get("markets", ["US"]):
     n_map = {"Top 50": 50, "Top 100": 100, "Top 200": 200, "All (~330)": len(tickers)}
     n = n_map.get(subset_label, 100)
     return tickers[:n]
@@ -2605,10 +2600,7 @@ def main():
 
     # ── App header ─────────────────────────────────────────────────────────────
     markets_active = st.session_state.get("markets", ["US"])
-    badges_html = "".join([
-        f"<span class='badge'>🇺🇸 NYSE/NASDAQ</span>" if m == "US"
-        for m in markets_active
-    ])
+    badges_html = "<span class='badge'>🇺🇸 NYSE/NASDAQ</span>"
 
     st.markdown(f"""
     <div style="margin-bottom:18px;">
@@ -2666,4 +2658,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
