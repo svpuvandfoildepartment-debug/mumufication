@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
 ║     AI STOCK SCREENER + PAPER TRADING SIMULATOR                      ║
-║     US Stocks (NYSE/NASDAQ) + Indian Stocks (NSE)                    ║
+║     US Stocks Only — NYSE/NASDAQ                    ║
 ║     Pure Share Market Only — No ETFs, No Crypto, No Commodities      ║
 ║     Disclaimer: Simulation only — NOT financial advice               ║
 ╚══════════════════════════════════════════════════════════════════════╝
@@ -55,7 +55,6 @@ except ImportError:
     TA_AVAILABLE = False
 
 # ─── CONSTANTS ───────────────────────────────────────────────────────────────
-INR_TO_USD = 1 / 83.5
 STRATEGY_FILE = "strategy_params.json"
 PORTFOLIO_FILE = "portfolio_state.json"
 
@@ -96,33 +95,8 @@ US_TICKERS = [
     "LCID","RIVN","NKLA","WKHS","XPEV","NIO","LI","GRAB","SE","DKNG",
 ]
 
-# ─── INDIA STOCKS — NSE (pure equities only) ─────────────────────────────────
-INDIA_TICKERS = [
-    # Nifty 50
-    "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
-    "HINDUNILVR.NS","KOTAKBANK.NS","SBIN.NS","BAJFINANCE.NS","BHARTIARTL.NS",
-    "ITC.NS","ASIANPAINT.NS","AXISBANK.NS","MARUTI.NS","SUNPHARMA.NS",
-    "TITAN.NS","WIPRO.NS","ULTRACEMCO.NS","NESTLEIND.NS","TECHM.NS",
-    "HCLTECH.NS","ONGC.NS","POWERGRID.NS","NTPC.NS","DIVISLAB.NS",
-    "DRREDDY.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS","JSWSTEEL.NS",
-    "TATASTEEL.NS","TATAMOTORS.NS","M&M.NS","BAJAJFINSV.NS","INDUSINDBK.NS",
-    "BPCL.NS","ADANIENT.NS","ADANIPORTS.NS","GRASIM.NS","HEROMOTOCO.NS",
-    "COALINDIA.NS","BRITANNIA.NS","SHREECEM.NS","SBILIFE.NS","HDFCLIFE.NS",
-    "APOLLOHOSP.NS","TATACONSUM.NS","LT.NS","PIDILITIND.NS","HAVELLS.NS",
-    # Nifty Next 50 / Mid-cap
-    "DMART.NS","BERGEPAINT.NS","GODREJCP.NS","MUTHOOTFIN.NS","SIEMENS.NS",
-    "BANDHANBNK.NS","FEDERALBNK.NS","IDFCFIRSTB.NS","RBLBANK.NS","AUBANK.NS",
-    "TRENT.NS","NAUKRI.NS","INDIGO.NS","IRCTC.NS","ZOMATO.NS",
-    "PAYTM.NS","NYKAA.NS","POLICYBZR.NS","DELHIVERY.NS","CARTRADE.NS",
-    "VEDL.NS","SAIL.NS","NMDC.NS","MOIL.NS","NATIONALUM.NS",
-    "TORNTPHARM.NS","LUPIN.NS","ALKEM.NS","AUROPHARMA.NS","BIOCON.NS",
-    "BALKRISIND.NS","MOTHERSON.NS","BHARAT FORGE.NS","CUMMINSIND.NS","SCHAEFFLER.NS",
-    "ICICIPRULI.NS","ICICIGI.NS","BAJAJHLDNG.NS","CHOLAFIN.NS","MANAPPURAM.NS",
-    "VOLTAS.NS","BLUESTARCO.NS","WHIRLPOOL.NS","CROMPTON.NS","POLYCAB.NS",
-    "PHOENIXLTD.NS","DLF.NS","GODREJPROP.NS","OBEROIRLTY.NS","PRESTIGE.NS",
-]
 
-ALL_TICKERS = US_TICKERS + INDIA_TICKERS
+ALL_TICKERS = US_TICKERS
 
 # ─── SECURITY HELPERS ────────────────────────────────────────────────────────
 def get_or_create_fernet_key() -> bytes:
@@ -857,7 +831,7 @@ class CompositeScorer:
 
 # ─── STOCK SCREENER ──────────────────────────────────────────────────────────
 class StockScreener:
-    """Main screening engine — US stocks (NYSE/NASDAQ) + India stocks (NSE)."""
+    """Main screening engine — US stocks (NYSE/NASDAQ) only."""
 
     def __init__(
         self,
@@ -884,13 +858,10 @@ class StockScreener:
         if "US" in self.markets:
             tickers += US_TICKERS
         if "India" in self.markets:
-            tickers += INDIA_TICKERS
         return tickers
 
     def _to_usd(self, price: float, symbol: str) -> float:
         """Convert INR to USD for Indian stocks."""
-        if symbol.endswith(".NS") or symbol.endswith(".BO"):
-            return price * INR_TO_USD
         return price
 
     def screen_single(self, symbol: str) -> Optional[Dict]:
@@ -995,7 +966,6 @@ class StockScreener:
         elif atr_pct > 5:
             score -= 10
         # Small currency-risk discount for Indian stocks
-        if symbol.endswith(".NS") or symbol.endswith(".BO"):
             score -= 3
         return min(max(score, 0), 100)
 
@@ -1471,7 +1441,7 @@ def init_session_state():
         "min_price": 5.0,
         "max_price": 500.0,
         "min_profit_pct": 15.0,
-        "markets": ["US", "India"],
+        "markets": ["US"],
         "screen_ticker_subset": "Top 100",
         "dark_mode": True,
         "selected_stock": None,
@@ -1548,7 +1518,6 @@ def render_screening_controls():
     with col_us:
         us_on = st.toggle("🇺🇸 US", value=("US" in st.session_state.markets), key="mkt_us")
     with col_in:
-        in_on = st.toggle("🇮🇳 India", value=("India" in st.session_state.markets), key="mkt_in")
 
     new_markets = []
     if us_on:
@@ -1567,7 +1536,7 @@ def render_screening_controls():
         min_value=0.5, max_value=5000.0,
         value=(st.session_state.min_price, st.session_state.max_price),
         step=0.5,
-        help="Indian stock prices auto-converted from INR at ~83.5 rate",
+        help="US stocks in USD at ~83.5 rate",
     )
 
     # ── Profit target ────────────────────────────────────────────────────────
@@ -1592,7 +1561,6 @@ def get_ticker_subset(subset_label: str) -> List[str]:
     if "US" in st.session_state.get("markets", ["US"]):
         tickers += US_TICKERS
     if "India" in st.session_state.get("markets", ["US"]):
-        tickers += INDIA_TICKERS
     n_map = {"Top 50": 50, "Top 100": 100, "Top 200": 200, "All (~330)": len(tickers)}
     n = n_map.get(subset_label, 100)
     return tickers[:n]
@@ -1671,7 +1639,6 @@ def render_screener_tab():
         | Market | Exchange | Sectors | Count |
         |--------|----------|---------|-------|
         | 🇺🇸 US | NYSE / NASDAQ | Tech, Finance, Healthcare, Consumer, Energy, Industrials, Materials, REITs, Utilities | ~200 stocks |
-        | 🇮🇳 India | NSE | Nifty 50 + Nifty Next 50 + Mid-cap | ~85 stocks |
 
         > ✅ **Pure share market only** — no ETFs, no crypto, no commodities, no forex.
         > 🔑 Enter your Finnhub API key in the sidebar for live data. Without it, demo mode uses synthetic prices.
@@ -1775,7 +1742,6 @@ def render_simulator_tab():
     """Render the paper trading simulator tab with full ledger."""
     tc = get_theme()
     active = st.session_state.get("active_market", "US")
-    flag   = "🇺🇸" if active == "US" else "🇮🇳"
     cur    = "$" if active == "US" else "₹"
 
     st.header(f"💹 Paper Trading Simulator — {flag} {active}")
@@ -2641,7 +2607,6 @@ def main():
     markets_active = st.session_state.get("markets", ["US"])
     badges_html = "".join([
         f"<span class='badge'>🇺🇸 NYSE/NASDAQ</span>" if m == "US"
-        else f"<span class='badge badge-green'>🇮🇳 NSE</span>"
         for m in markets_active
     ])
 
@@ -2669,7 +2634,7 @@ def main():
         st.markdown(f"""
         <div style="color:{t['disclaimer_text']};font-size:0.82rem;line-height:1.7;">
         This tool is for <strong>educational and simulation purposes only</strong> — NOT financial advice.<br>
-        Covers US stocks (NYSE/NASDAQ) + Indian stocks (NSE). No ETFs, crypto, or commodities.<br>
+        Covers US stocks only (NYSE/NASDAQ). No ETFs, crypto, or commodities.<br>
         Past simulated performance does not guarantee future real-world results.<br>
         Stock markets carry substantial risk including total loss of capital.<br>
         <strong>Always consult a licensed financial advisor before making any investment decisions.</strong>
