@@ -1,9 +1,0 @@
-streamlit
-requests
-pandas
-numpy
-plotly
-cryptography
-python-dateutil
-pytz
-ta
